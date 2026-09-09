@@ -5,9 +5,11 @@ public class CognitionScheduler : MonoBehaviour
 {
     public static CognitionScheduler Instance { get; private set; }
 
-    [SerializeField] float baseThinkInterval = 3f;
-    [SerializeField] float stressedThinkInterval = 1.5f;
-    [SerializeField] float calmThinkInterval = 10f;
+    // Slowed down across the board so a creature's decisions/speech actually linger long enough to
+    // read and absorb, instead of the whole population re-deciding every couple of seconds.
+    [SerializeField] float baseThinkInterval = 6f;
+    [SerializeField] float stressedThinkInterval = 3f;
+    [SerializeField] float calmThinkInterval = 18f;
     [SerializeField] int maxConcurrentThoughts = 3;
 
     List<CreatureThinkEntry> creatures = new List<CreatureThinkEntry>();
@@ -37,6 +39,10 @@ public class CognitionScheduler : MonoBehaviour
     {
         if (OllamaClient.Instance == null) return;
 
+        // Wait quietly until the LLM backend has connected — no point requesting (or spamming errors) before then.
+        // Creatures still run on the fast-layer AI in the meantime.
+        if (!OllamaClient.Instance.IsReady) return;
+
         for (int i = 0; i < creatures.Count; i++)
         {
             var entry = creatures[i];
@@ -57,6 +63,9 @@ public class CognitionScheduler : MonoBehaviour
         OllamaClient.Instance.RequestThought(prompt,
             response =>
             {
+                // The world may have been unloaded (Quit to Menu) while this thought was in flight —
+                // drop it rather than touch a now-destroyed creature or scheduler.
+                if (this == null || entry.mind == null) return;
                 entry.mind.ApplyLLMResponse(
                     response.reasoning,
                     response.belief,
@@ -74,6 +83,7 @@ public class CognitionScheduler : MonoBehaviour
             },
             error =>
             {
+                if (this == null || entry.mind == null) return;
                 Debug.LogWarning($"[{entry.mind.CreatureName}] LLM error: {error}");
                 entry.nextThinkTime = Time.time + baseThinkInterval * 2f;
                 entry.isThinking = false;

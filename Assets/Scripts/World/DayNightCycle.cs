@@ -5,8 +5,10 @@ public class DayNightCycle : MonoBehaviour
     public static DayNightCycle Instance { get; private set; }
 
     [Header("Cycle")]
-    [SerializeField] float dayLengthSeconds = 120f;
-    [SerializeField] float startTimeOfDay = 0.25f;
+    [SerializeField] float dayLengthSeconds = 300f; // 5 min/day — a real day/night rhythm across a ~30-45 min session
+    // Start just after dawn (not noon) so newly-arrived creatures get a full day of light to
+    // gather, build a shelter, and light a fire before their first dangerous night.
+    [SerializeField] float startTimeOfDay = 0.05f;
 
     [Header("Sun Visual")]
     [SerializeField] float sunDistance = 600f;
@@ -22,12 +24,21 @@ public class DayNightCycle : MonoBehaviour
     float timeOfDay;
     Light sunLight;
     GameObject sunVisual;
-    Material sunMaterial;
-    Material glowMaterial;
     Vector3 sunDirection;
 
+    float daylight = 1f; // 0 = night, 1 = full day (shared by scene lighting + creature labels)
+
+    public float DayLengthSeconds => dayLengthSeconds;
     public float TimeOfDay => timeOfDay;
     public Vector3 SunDirection => sunDirection;
+    public float DaylightFactor => daylight;
+    public bool IsDay => daylight > 0.35f;
+
+    public void SetTimeOfDay(float t)
+    {
+        timeOfDay = Mathf.Repeat(t, 1f);
+        UpdateCycle();
+    }
 
     void Awake()
     {
@@ -42,6 +53,21 @@ public class DayNightCycle : MonoBehaviour
         UpdateCycle();
     }
 
+    public float SunDistance => sunDistance;
+
+    /// <summary>
+    /// Place the sun far out so it reads as a distant star rather than a lamp over the planet.
+    /// Size scales with distance to keep a constant, small angular size (~1.4°, sun-like). The
+    /// starfield and camera far-clip (set by GameBootstrap) are sized off SunDistance to contain it.
+    /// </summary>
+    public void ConfigureForRadius(float r)
+    {
+        sunDistance = Mathf.Max(10000f, r * 10f);
+        sunSize = sunDistance * 0.025f;
+        if (sunVisual != null) sunVisual.transform.localScale = Vector3.one * sunSize;
+        UpdateCycle();
+    }
+
     void CreateSunVisual()
     {
         sunVisual = GameObject.CreatePrimitive(PrimitiveType.Sphere);
@@ -50,9 +76,14 @@ public class DayNightCycle : MonoBehaviour
         sunVisual.transform.localScale = Vector3.one * sunSize;
 
         var shader = Shader.Find("Universal Render Pipeline/Unlit");
-        sunMaterial = new Material(shader);
-        sunMaterial.color = new Color(1f, 0.95f, 0.7f);
-        sunVisual.GetComponent<MeshRenderer>().material = sunMaterial;
+        if (shader == null) shader = Shader.Find("Universal Render Pipeline/Lit");
+        if (shader == null) shader = Shader.Find("Unlit/Color");
+        if (shader != null)
+        {
+            var sunMaterial = new Material(shader);
+            sunMaterial.color = new Color(1f, 0.95f, 0.7f);
+            sunVisual.GetComponent<MeshRenderer>().material = sunMaterial;
+        }
 
         var glowObj = GameObject.CreatePrimitive(PrimitiveType.Sphere);
         glowObj.name = "SunGlow";
@@ -61,14 +92,17 @@ public class DayNightCycle : MonoBehaviour
         glowObj.transform.localPosition = Vector3.zero;
         glowObj.transform.localScale = Vector3.one * 2.5f;
 
-        glowMaterial = new Material(shader);
-        glowMaterial.color = new Color(1f, 0.9f, 0.5f, 0.15f);
-        glowMaterial.SetFloat("_Surface", 1f);
-        glowMaterial.SetInt("_SrcBlend", (int)UnityEngine.Rendering.BlendMode.SrcAlpha);
-        glowMaterial.SetInt("_DstBlend", (int)UnityEngine.Rendering.BlendMode.OneMinusSrcAlpha);
-        glowMaterial.SetInt("_ZWrite", 0);
-        glowMaterial.renderQueue = 3000;
-        glowObj.GetComponent<MeshRenderer>().material = glowMaterial;
+        if (shader != null)
+        {
+            var glowMaterial = new Material(shader);
+            glowMaterial.color = new Color(1f, 0.9f, 0.5f, 0.15f);
+            glowMaterial.SetFloat("_Surface", 1f);
+            glowMaterial.SetInt("_SrcBlend", (int)UnityEngine.Rendering.BlendMode.SrcAlpha);
+            glowMaterial.SetInt("_DstBlend", (int)UnityEngine.Rendering.BlendMode.OneMinusSrcAlpha);
+            glowMaterial.SetInt("_ZWrite", 0);
+            glowMaterial.renderQueue = 3000;
+            glowObj.GetComponent<MeshRenderer>().material = glowMaterial;
+        }
     }
 
     void Update()
@@ -107,7 +141,9 @@ public class DayNightCycle : MonoBehaviour
         else
             t = (sunHeight + 0.1f) / 0.2f;
 
-        sunLight.intensity = Mathf.Lerp(nightIntensity, dayIntensity, t);
+        daylight = t;
+        float weather = WeatherSystem.Instance != null ? WeatherSystem.Instance.LightMultiplier : 1f;
+        sunLight.intensity = Mathf.Lerp(nightIntensity, dayIntensity, t) * weather;
 
         Color sunColor;
         if (t > 0.5f)
@@ -116,7 +152,7 @@ public class DayNightCycle : MonoBehaviour
             sunColor = Color.Lerp(new Color(0.3f, 0.2f, 0.15f), new Color(1f, 0.7f, 0.3f), t * 2f);
         sunLight.color = sunColor;
 
-        RenderSettings.ambientLight = Color.Lerp(nightAmbient, dayAmbient, t);
+        RenderSettings.ambientLight = Color.Lerp(nightAmbient, dayAmbient, t) * weather;
 
         if (sunVisual != null)
         {
@@ -127,7 +163,9 @@ public class DayNightCycle : MonoBehaviour
 
     public float GetSunExposure(Vector3 worldPosition)
     {
-        Vector3 surfaceNormal = worldPosition.normalized;
+        Vector3 surfaceNormal = SphericalWorld.Instance != null
+            ? SphericalWorld.Instance.GetSurfaceNormal(worldPosition)
+            : worldPosition.normalized;
         float dot = Vector3.Dot(surfaceNormal, sunDirection);
         return Mathf.Clamp01((dot + 0.15f) / 0.65f);
     }

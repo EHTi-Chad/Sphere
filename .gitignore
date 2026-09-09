@@ -105,3 +105,23 @@ InitTestScene*.unity*
 
 # Auto-generated scenes by play mode tests
 /[Aa]ssets/[Ii]nit[Tt]est[Ss]cene*.unity*
+
+# --- Project-specific exclusions (see THIRD_PARTY_ASSETS.md) ---
+
+# Local LLM weight files — multi-GB, way over GitHub's 100MB file limit, and re-downloadable.
+/Models/
+
+# llama.cpp native binaries for every platform (LLMUnity plugin) — several files 90MB-1.2GB each,
+# also over GitHub's limit. Reinstalled by the plugin's own setup step. (StreamingAssets currently
+# holds nothing else, so the whole folder is excluded rather than just the LlamaLib subfolder.)
+/Assets/StreamingAssets/
+/Assets/StreamingAssets.meta
+
+# Third-party Asset Store packs — redistributable, not original project work. One file inside
+# Proxy Games (a 251MB HDRI) is also individually over GitHub's 100MB limit either way.
+/Assets/Proxy Games/
+/Assets/Proxy Games.meta
+/Assets/Rocks and Boulders 2/
+/Assets/Rocks and Boulders 2.meta
+/Assets/TerrainSampleAssets/
+/Assets/TerrainSampleAssets.meta

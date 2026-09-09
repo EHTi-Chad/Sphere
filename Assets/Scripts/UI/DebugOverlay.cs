@@ -1,6 +1,4 @@
-using System;
 using System.Diagnostics;
-using System.Text;
 using UnityEngine;
 using UnityEngine.Profiling;
 using UnityEngine.InputSystem;
@@ -8,8 +6,10 @@ using UnityEngine.InputSystem;
 public class DebugOverlay : MonoBehaviour
 {
     bool visible = true;
-    float updateInterval = 1f;
+    bool collapsed = true; // start minimized — just FPS; F2 to expand the full GPU/AI/memory panel
+    float updateInterval = 2f;
     float timer;
+    volatile bool gpuQueryRunning;
 
     // FPS
     int frameCount;
@@ -46,6 +46,8 @@ public class DebugOverlay : MonoBehaviour
         var kb = Keyboard.current;
         if (kb != null && kb.f3Key.wasPressedThisFrame)
             visible = !visible;
+        if (kb != null && kb.f2Key.wasPressedThisFrame)
+            collapsed = !collapsed;
 
         frameCount++;
         fpsTimer += Time.unscaledDeltaTime;
@@ -60,9 +62,19 @@ public class DebugOverlay : MonoBehaviour
         if (timer >= updateInterval)
         {
             timer = 0f;
-            QueryNvidiaSmi();
-            QueryOllama();
-            QueryUnityMemory();
+            QueryUnityMemory(); // Unity Profiler API — main thread only
+
+            // nvidia-smi spawns external processes; run them off the main thread so they never hitch the frame.
+            if (!gpuQueryRunning)
+            {
+                gpuQueryRunning = true;
+                System.Threading.Tasks.Task.Run(() =>
+                {
+                    try { QueryNvidiaSmi(); QueryOllama(); }
+                    catch { }
+                    finally { gpuQueryRunning = false; }
+                });
+            }
         }
     }
 
@@ -78,7 +90,7 @@ public class DebugOverlay : MonoBehaviour
                 UseShellExecute = false,
                 CreateNoWindow = true
             };
-            var proc = Process.Start(psi);
+            using var proc = Process.Start(psi);
             string output = proc.StandardOutput.ReadToEnd();
             proc.WaitForExit(2000);
 
@@ -110,7 +122,7 @@ public class DebugOverlay : MonoBehaviour
                 UseShellExecute = false,
                 CreateNoWindow = true
             };
-            var proc = Process.Start(psi);
+            using var proc = Process.Start(psi);
             string output = proc.StandardOutput.ReadToEnd();
             proc.WaitForExit(2000);
 
@@ -129,7 +141,7 @@ public class DebugOverlay : MonoBehaviour
                         {
                             int pid = int.Parse(parts[0].Trim());
                             int mem = int.Parse(parts[1].Trim());
-                            var p = Process.GetProcessById(pid);
+                            using var p = Process.GetProcessById(pid);
                             string name = p.ProcessName.ToLowerInvariant();
                             if (name.Contains("ollama") || name.Contains("llama") || name.Contains("ggml") || name.Contains("llm"))
                             {
@@ -144,6 +156,8 @@ public class DebugOverlay : MonoBehaviour
 
             if (!ollamaRunning)
             {
+                // Every element also needs disposing (GetProcesses() hands back a live handle per entry,
+                // not just the array) — this loop runs every `updateInterval` for the whole session.
                 var ollProcs = Process.GetProcesses();
                 foreach (var p in ollProcs)
                 {
@@ -157,6 +171,7 @@ public class DebugOverlay : MonoBehaviour
                         }
                     }
                     catch { }
+                    finally { p.Dispose(); }
                 }
             }
         }
@@ -230,10 +245,20 @@ public class DebugOverlay : MonoBehaviour
 
         InitStyles();
 
+        Color fpsColor = currentFps >= 55 ? Color.green : currentFps >= 30 ? Color.yellow : Color.red;
+
+        // Minimized: just a small FPS chip.
+        if (collapsed)
+        {
+            GUILayout.BeginArea(new Rect(10, 10, 150, 30), bgStyle);
+            GUILayout.Label($"<color=#{ColorUtility.ToHtmlStringRGB(fpsColor)}>{currentFps:F0} FPS</color>   <size=9>F2</size>", fpsStyle);
+            GUILayout.EndArea();
+            return;
+        }
+
         GUILayout.BeginArea(new Rect(10, 10, 280, 420), bgStyle);
 
         // FPS
-        Color fpsColor = currentFps >= 55 ? Color.green : currentFps >= 30 ? Color.yellow : Color.red;
         GUILayout.Label($"<color=#{ColorUtility.ToHtmlStringRGB(fpsColor)}>{currentFps:F0} FPS</color>  ({Time.unscaledDeltaTime * 1000f:F1} ms)", fpsStyle);
 
         GUILayout.Space(6);
@@ -250,7 +275,7 @@ public class DebugOverlay : MonoBehaviour
         GUILayout.Space(6);
 
         // AI
-        GUILayout.Label("AI (Ollama)", headerStyle);
+        GUILayout.Label("AI (llama.cpp)", headerStyle);
         var client = OllamaClient.Instance;
         if (client != null)
         {
@@ -264,6 +289,7 @@ public class DebugOverlay : MonoBehaviour
             else
                 status = "Waiting...";
             DrawRow("Status", status);
+            DrawRow("Backend", client.BackendName);
             DrawRow("Model", client.ModelName);
             DrawRow("Requests", $"{client.RequestsSent} sent");
             DrawRow("Responses", $"{client.ResponsesReceived} ok / {client.Errors} err");
@@ -292,7 +318,7 @@ public class DebugOverlay : MonoBehaviour
         DrawRow("Reserved", $"{unityReserved / (1024 * 1024)} MB");
 
         GUILayout.Space(4);
-        GUILayout.Label("F3 to toggle", footerStyle);
+        GUILayout.Label("F2 minimize  ·  F3 hide", footerStyle);
 
         GUILayout.EndArea();
     }
